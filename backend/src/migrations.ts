@@ -363,4 +363,8 @@ create table settings (
 ${TABLES.map((t) => `alter table ${t} enable row level security;`).join("\n")}
 `,
   },
+  {
+    id: "002_rls_schema_migrations",
+    sql: `alter table schema_migrations enable row level security;`,
+  },
 ];
