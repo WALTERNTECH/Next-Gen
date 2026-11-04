@@ -1,0 +1,14 @@
+{
+  "name": "next-gen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Next-Gen — B2B wholesale marketplace for textiles and apparel, with a dynamic multi-vertical catalog",
+  "workspaces": ["backend", "frontend"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "npm run build -w frontend && npm run build -w backend",
+    "start": "npm start -w backend",
+    "test": "npm test -w backend",
+    "typecheck": "npm run typecheck -w backend && npm run typecheck -w frontend"
+  }
+}
