@@ -15,7 +15,7 @@ import { filesRouter } from "./routes/files.routes.js";
 import { meRouter } from "./routes/me.routes.js";
 import { tradeRouter } from "./routes/trade.routes.js";
 import { dropshipRouter, merchantRouter } from "./routes/merchant.routes.js";
-import { shopRouter, storeRouter, v1Router } from "./routes/store.routes.js";
+import { shopRouter, sitemap, storeRouter, v1Router } from "./routes/store.routes.js";
 import { db } from "./config/db.js";
 import { releaseDue } from "./services/retail.js";
 import { notFound } from "./utils/http.js";
@@ -54,6 +54,7 @@ export function createApp() {
   app.use(cookieParser());
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
+  app.get("/sitemap.xml", sitemap);
   app.use(
     "/api",
     rateLimit({

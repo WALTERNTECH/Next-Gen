@@ -1,0 +1,10 @@
+# Storefronts (/s/...) are public. The workspace and admin send noindex.
+# /api/store/ and /api/files/image/ stay open so crawlers can render storefront pages.
+User-agent: *
+Allow: /
+Allow: /api/store/
+Allow: /api/files/image/
+Disallow: /api/
+Disallow: /admin
+
+Sitemap: https://next-gen-black-six.vercel.app/sitemap.xml

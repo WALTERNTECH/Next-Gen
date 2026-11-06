@@ -74,6 +74,40 @@ const LISTING_COLS = `rl.id, rl.title, rl.retail_price_cents, rl.compare_at_cent
   (select round(avg(rating)::numeric, 1)::float8 from reviews r where r.retail_listing_id = rl.id and r.status = 'published') as rating`;
 const LIVE_LISTING = `rl.status = 'active' and p.status = 'active' and (not rl.is_dropshipped or (p.dropship_enabled and p.dropship_price_cents is not null)) and (rl.is_dropshipped or rl.stock > 0)`;
 
+const xml = (s: string) => s.replace(/[<>&'"]/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/** Live, real (non-sample) storefronts and their live listings, for search engines. */
+export async function sitemap(req: Request, res: Response) {
+  const base = (env.publicUrl || `https://${req.get("host")}`).replace(/\/$/, "");
+  const stores = await many<{ id: string; slug: string; updated_at: Date }>(
+    db(),
+    `select s.id, s.slug, s.updated_at from storefronts s join companies co on co.id = s.company_id
+      where s.status = 'live' and not s.is_sample and co.status = 'active' order by s.slug limit 5000`,
+  );
+  const listings = stores.length
+    ? await many<{ id: string; slug: string; updated_at: Date }>(
+        db(),
+        `select rl.id, s.slug, rl.updated_at from retail_listings rl join products p on p.id = rl.product_id join storefronts s on s.id = rl.storefront_id
+          where rl.storefront_id = any($1) and ${LIVE_LISTING} order by s.slug, rl.created_at limit 45000`,
+        [stores.map((s) => s.id)],
+      )
+    : [];
+  const url = (path: string, at: Date) => `<url><loc>${xml(base + path)}</loc><lastmod>${new Date(at).toISOString().slice(0, 10)}</lastmod></url>`;
+  res
+    .type("application/xml")
+    .set("Cache-Control", "public, max-age=3600")
+    .send(
+      [
+        `<?xml version="1.0" encoding="UTF-8"?>`,
+        `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`,
+        ...stores.map((s) => url(`/s/${s.slug}`, s.updated_at)),
+        ...listings.map((l) => url(`/s/${l.slug}/p/${l.id}`, l.updated_at)),
+        `</urlset>`,
+        ``,
+      ].join("\n"),
+    );
+}
+
 export const storeRouter = Router();
 
 storeRouter.get("/:slug", async (req, res) => {

@@ -19,6 +19,8 @@ export type Env = {
   secureCookies: boolean;
   /** Vercel Cron sends it as a bearer token to /api/cron/release. */
   cronSecret: string;
+  /** Canonical origin for the sitemap, e.g. https://shop.example.com. Falls back to the request host. */
+  publicUrl: string;
 };
 
 function masterKey(raw: string | undefined, env: Env["nodeEnv"]): Buffer {
@@ -46,6 +48,7 @@ export function loadEnv(e: NodeJS.ProcessEnv = process.env): Env {
     paymentsDriver: e.PAYMENTS_DRIVER === "stripe" ? "stripe" : "simulated",
     secureCookies: nodeEnv === "production",
     cronSecret: e.CRON_SECRET ?? "",
+    publicUrl: e.PUBLIC_URL ?? "",
   };
   if (nodeEnv === "production") {
     const missing = [!env.databaseUrl && "DATABASE_URL", env.jwtSecret.length < 32 && "JWT_SECRET (32+ chars)"].filter(Boolean);

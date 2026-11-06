@@ -39,6 +39,8 @@ Sample payment is held in escrow until the buyer approves the lab dip. Funding t
 
 A labelled sample store, Kilele Basics (`/s/kilele-basics`), dropships the sample garments and headphones.
 
+**Search engines**: storefront home and product pages of live, non-sample stores are indexable (title, description, canonical, Open Graph, schema.org Product with price, stock and rating). Cart, checkout, account and order pages, the sample store, the workspace and the admin send `noindex`. `/sitemap.xml` lists live real storefronts and their listings (set `PUBLIC_URL` for a custom domain); `robots.txt` points to it.
+
 ## Running
 
 ```

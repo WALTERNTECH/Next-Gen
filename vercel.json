@@ -22,6 +22,10 @@
       "destination": "/api"
     },
     {
+      "source": "/sitemap.xml",
+      "destination": "/api"
+    },
+    {
       "source": "/((?!api/|assets/).*)",
       "destination": "/index.html"
     }
@@ -66,7 +70,12 @@
         {
           "key": "Strict-Transport-Security",
           "value": "max-age=31536000; includeSubDomains; preload"
-        },
+        }
+      ]
+    },
+    {
+      "source": "/((?!api/|s/|assets/|robots.txt$|sitemap.xml$).*)",
+      "headers": [
         {
           "key": "X-Robots-Tag",
           "value": "noindex"

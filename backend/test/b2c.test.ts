@@ -100,6 +100,14 @@ test("B2B2C: storefront, split payouts, dropship, refunds, reviews, API, erasure
   assert.equal(low.status, 400);
   const listing = await ok(call(merchant, "POST", "/api/merchant/listings", { product_id: prod.id, title: "Everyday Tee", retail_price_cents: 2000, is_dropshipped: true, options: [{ name: "Size", values: ["S", "M", "L"] }] }), 201);
 
+  // Sitemap: live real storefronts and their listings; the sample store stays out.
+  const sm = await fetch(base + "/sitemap.xml");
+  assert.match(sm.headers.get("content-type") ?? "", /xml/);
+  const smText = await sm.text();
+  assert.ok(smText.includes("/s/savanna-wear</loc>"));
+  assert.ok(smText.includes(`/s/savanna-wear/p/${listing.id}</loc>`));
+  assert.ok(!smText.includes("kilele-basics"));
+
   // Consumer: quote with Kenyan VAT, then checkout.
   const consumer: Jar = { cookie: "" };
   await ok(call(consumer, "POST", "/api/shop/auth/signup", { name: "Wanjiru Kamau", email: "wanjiru@example.test", password: "consumer-pass", accept: true }), 201);

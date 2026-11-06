@@ -5,6 +5,7 @@ import { api, imageUrl } from "../lib/api";
 import { date, fmtValue, money } from "../lib/format";
 import { Empty, Failed, Field, fieldErrors, Loading, Modal, Swatch, toast, useAction, useLoad } from "../ui/kit";
 import { COUNTRIES } from "../app/Auth";
+import { applyHead, useHead } from "./head";
 
 // The consumer storefront at /s/:slug: a merchant's shop selling catalog items. Consumers browse,
 // keep a cart, check out with tax for their country, track orders, confirm receipt, report a
@@ -57,8 +58,8 @@ export function Shop() {
     }
   };
   useEffect(() => {
-    if (data?.store) document.title = data.store.name;
-  }, [data]);
+    if (error) applyHead({ title: "Store not open", index: false });
+  }, [error]);
   if (error)
     return (
       <div className="shop">
@@ -134,6 +135,7 @@ function Price({ cents, compare, currency }: { cents: number; compare?: number |
 
 function Home({ listings }: { listings: any[] }) {
   const { slug, store } = useShop();
+  useHead({ title: store.tagline ? `${store.name} · ${store.tagline}` : store.name, description: store.about || store.tagline, path: `/s/${slug}`, index: !store.is_sample, image: listings.find((l) => l.image_id) ? imageUrl(listings.find((l) => l.image_id).image_id) : null }, [slug, store, listings]);
   return (
     <>
       <section className="shop-hero">
@@ -178,6 +180,7 @@ function Product() {
   const { id } = useParams();
   const { slug, store, cart, setCart } = useShop();
   const { data, error, loading } = useLoad(() => api.get(`/store/${slug}/listings/${id}`), [id]);
+  useHead(data ? productHead(slug, store, data) : error ? { title: `Not available · ${store.name}`, index: false } : null, [data, error]);
   const [opt, setOpt] = useState("");
   const [qty, setQty] = useState(1);
   const [img, setImg] = useState(0);
@@ -312,6 +315,39 @@ function Product() {
   );
 }
 
+// Title, description and schema.org Product data, so search results can show price, stock and rating.
+function productHead(slug: string, store: any, data: any) {
+  const l = data.listing;
+  const path = `/s/${slug}/p/${l.id}`;
+  const image = l.image_ids?.[0] ? imageUrl(l.image_ids[0]) : null;
+  const abs = (p: string) => new URL(p, location.origin).href;
+  return {
+    title: `${l.title} · ${store.name}`,
+    description: l.description || `${l.title} from ${store.name}.`,
+    path,
+    index: !store.is_sample,
+    image,
+    jsonLd: {
+      "@context": "https://schema.org",
+      "@type": "Product",
+      name: l.title,
+      description: l.description || undefined,
+      image: image ? [abs(image)] : undefined,
+      category: l.category_name || undefined,
+      brand: { "@type": "Brand", name: store.name },
+      offers: {
+        "@type": "Offer",
+        url: abs(path),
+        price: (Number(l.retail_price_cents) / 100).toFixed(2),
+        priceCurrency: store.currency,
+        availability: l.in_stock ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
+        seller: { "@type": "Organization", name: store.name },
+      },
+      aggregateRating: l.review_count ? { "@type": "AggregateRating", ratingValue: l.rating, reviewCount: l.review_count } : undefined,
+    },
+  };
+}
+
 function SpecRow({ label, value }: { label: string; value: string }) {
   return (
     <>
@@ -363,6 +399,7 @@ function Summary({ q, currency }: { q: any; currency: string }) {
 
 function Cart() {
   const { slug, store, cart, setCart } = useShop();
+  useHead({ title: `Cart · ${store.name}`, index: false }, [store]);
   const [country, setCountry] = useState(() => {
     try {
       return localStorage.getItem("ng.country") ?? "";
@@ -512,6 +549,7 @@ function AuthBox({ onIn }: { onIn: () => void }) {
 
 function Checkout() {
   const { slug, store, cart, setCart, me, refreshMe } = useShop();
+  useHead({ title: `Checkout · ${store.name}`, index: false }, [store]);
   const nav = useNavigate();
   const [f, setF] = useState(() => {
     let country = "";
@@ -655,7 +693,8 @@ const STEP = ["paid", "shipped", "delivered"];
 
 function OrderPage() {
   const { id } = useParams();
-  const { slug, me } = useShop();
+  const { slug, store, me } = useShop();
+  useHead({ title: `Your order · ${store.name}`, index: false }, [store]);
   const { data, error, loading, reload } = useLoad(() => (me ? api.get(`/shop/orders/${id}`) : Promise.resolve(null)), [id, me?.id]);
   const [issue, setIssue] = useState(false);
   const [review, setReview] = useState<any>(null);
@@ -878,7 +917,8 @@ function ReviewDialog({ orderId, line, onClose, onDone }: { orderId: string; lin
 }
 
 function Account() {
-  const { slug, me, refreshMe } = useShop();
+  const { slug, store, me, refreshMe } = useShop();
+  useHead({ title: `Your account · ${store.name}`, index: false }, [store]);
   const orders = useLoad(() => (me ? api.get("/shop/orders") : Promise.resolve(null)), [me?.id]);
   const [del, setDel] = useState(false);
   const nav = useNavigate();
