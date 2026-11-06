@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import cookieParser from "cookie-parser";
@@ -13,6 +14,11 @@ import { catalogRouter, supplierRouter } from "./routes/catalog.routes.js";
 import { filesRouter } from "./routes/files.routes.js";
 import { meRouter } from "./routes/me.routes.js";
 import { tradeRouter } from "./routes/trade.routes.js";
+import { dropshipRouter, merchantRouter } from "./routes/merchant.routes.js";
+import { shopRouter, storeRouter, v1Router } from "./routes/store.routes.js";
+import { db } from "./config/db.js";
+import { releaseDue } from "./services/retail.js";
+import { notFound } from "./utils/http.js";
 
 export function createApp() {
   const app = express();
@@ -68,9 +74,22 @@ export function createApp() {
   app.use("/api/auth", authRouter);
   app.use("/api/me", meRouter);
   app.use("/api/catalog", catalogRouter);
+  app.use("/api/supplier/dropship", dropshipRouter);
   app.use("/api/supplier", supplierRouter);
   app.use("/api/files", filesRouter);
   app.use("/api/admin", adminRouter);
+  app.use("/api/merchant", merchantRouter);
+  app.use("/api/store", storeRouter);
+  app.use("/api/shop", shopRouter);
+  app.use("/api/v1", v1Router);
+
+  // Vercel Cron, daily: releases consumer-order splits whose protection window has passed.
+  app.get("/api/cron/release", async (req, res) => {
+    const want = Buffer.from(`Bearer ${env.cronSecret}`);
+    const got = Buffer.from(req.get("authorization") ?? "");
+    if (!env.cronSecret || want.length !== got.length || !timingSafeEqual(want, got)) throw notFound();
+    res.json({ released: await db().tx((q) => releaseDue(q)) });
+  });
   app.use("/api", tradeRouter);
   app.use("/api", notFoundHandler);
 

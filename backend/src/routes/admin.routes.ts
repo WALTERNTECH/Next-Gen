@@ -7,7 +7,9 @@ import { aqlPlan, aqlVerdict } from "../services/aql.js";
 import { audit } from "../services/audit.js";
 import { ATTR_COLS, checkDefinition, effectiveAttributes, keysInLineage, slugify, type AttributeDef } from "../services/catalog.js";
 import { recordInspection, resolveDispute, type Party } from "../services/orders.js";
-import { removeSampleData, seedSampleData } from "../seed.js";
+import { platformFeePct, readShipTo, refundOrder, regionOnly, releaseDue, releaseOrder } from "../services/retail.js";
+import { removeSampleData, seedSampleData, seedSampleStore } from "../seed.js";
+import { consumerOrderDetail } from "./merchant.routes.js";
 import { badRequest, conflict, forbidden, notFound } from "../utils/http.js";
 import { decrypt, hashPassword } from "../utils/security.js";
 import { adminAuthRouter } from "./auth.routes.js";
@@ -48,6 +50,8 @@ adminRouter.get("/overview", any, async (req, res) => {
     inspections: await n(`select count(*)::int as n from orders where stage = 'inspection_requested'`),
     disputes: await n(`select count(*)::int as n from disputes where status = 'open'`),
     draft_categories: await n(`select count(*)::int as n from categories where status = 'draft'`),
+    consumer_issues: await n(`select count(*)::int as n from consumer_issues where status = 'open'`),
+    failed_inspections: await n(`select count(*)::int as n from orders o where o.stage = 'in_production' and (select result from inspections i where i.order_id = o.id order by created_at desc limit 1) = 'fail'`),
   };
   if (req.query.lite) return void res.json({ counts, payments: env.paymentsDriver });
   const escrow = await one(
@@ -96,7 +100,16 @@ adminRouter.get("/overview", any, async (req, res) => {
        from companies s join orders o on o.supplier_company_id = s.id where o.stage not in ('cancelled') group by s.id order by value desc limit 5`,
   );
   const activity = await many(q, `select id, actor_label, action, target, at from audit_log order by at desc limit 12`);
-  res.json({ counts, escrow, today, stages, trend, catalog: catalogStats, verticals, top_suppliers: topSuppliers, activity, payments: env.paymentsDriver });
+  const retail = await one(
+    q,
+    `select (select count(*)::int from storefronts where status = 'live') as live_stores,
+            (select count(*)::int from retail_listings where status = 'active') as retail_listings,
+            (select count(*)::int from consumer_orders where created_at > now() - interval '24 hours') as orders_today,
+            (select coalesce(sum(total_cents),0)::bigint from consumer_orders where payment_status <> 'refunded') as gmv,
+            (select coalesce(sum(amount_cents),0)::bigint from payout_splits where status = 'held' and party <> 'refund') as held,
+            (select coalesce(sum(amount_cents),0)::bigint from payout_splits where party = 'platform' and status = 'released') as fees_earned`,
+  );
+  res.json({ counts, escrow, today, stages, trend, catalog: catalogStats, verticals, top_suppliers: topSuppliers, activity, retail, payments: env.paymentsDriver });
 });
 
 // ---- Taxonomy --------------------------------------------------------------------------------
@@ -225,6 +238,8 @@ const attrBody = z.object({
   is_filterable: z.boolean().default(false),
   in_comparison: z.boolean().default(false),
   in_rfq: z.boolean().default(false),
+  is_wholesale_only: z.boolean().default(false),
+  is_consumer_visible: z.boolean().default(true),
 });
 
 /** "Save schema changes": the node's own attribute list, replaced as a whole, in order. */
@@ -246,6 +261,7 @@ adminRouter.put("/categories/:id/attributes", catalog, async (req, res) => {
     if (a.input_type !== "text") a.regex = null;
     if (a.input_type !== "select" && a.input_type !== "multiselect") a.options = [];
     if (a.input_type === "file") a.is_filterable = false;
+    if (a.is_wholesale_only) a.is_consumer_visible = false;
   }
   const result = await db().tx(async (q) => {
     const before = await many<AttributeDef>(q, `select ${ATTR_COLS} from attribute_defs where category_id = $1`, [id]);
@@ -255,11 +271,11 @@ adminRouter.put("/categories/:id/attributes", catalog, async (req, res) => {
     let i = 0;
     const changes: string[] = removed.map((r) => `removed ${r.key}`);
     for (const a of attributes) {
-      const vals = [a.key, a.label, a.input_type, a.unit || null, JSON.stringify(a.options), a.required, a.min_value ?? null, a.max_value ?? null, a.regex || null, a.help, a.is_filterable, a.in_comparison, a.in_rfq, i++];
+      const vals = [a.key, a.label, a.input_type, a.unit || null, JSON.stringify(a.options), a.required, a.min_value ?? null, a.max_value ?? null, a.regex || null, a.help, a.is_filterable, a.in_comparison, a.in_rfq, i++, a.is_wholesale_only, a.is_consumer_visible];
       if (a.id && before.some((b) => b.id === a.id)) {
         await q.query(
           `update attribute_defs set key=$2, label=$3, input_type=$4, unit=$5, options=$6, required=$7, min_value=$8, max_value=$9, regex=$10, help=$11,
-             is_filterable=$12, in_comparison=$13, in_rfq=$14, position=$15, updated_at=now() where id = $1`,
+             is_filterable=$12, in_comparison=$13, in_rfq=$14, position=$15, is_wholesale_only=$16, is_consumer_visible=$17, updated_at=now() where id = $1`,
           [a.id, ...vals],
         );
         const old = before.find((b) => b.id === a.id)!;
@@ -275,8 +291,8 @@ adminRouter.put("/categories/:id/attributes", catalog, async (req, res) => {
         } else changes.push(`updated ${a.key}`);
       } else {
         await q.query(
-          `insert into attribute_defs (category_id, key, label, input_type, unit, options, required, min_value, max_value, regex, help, is_filterable, in_comparison, in_rfq, position)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          `insert into attribute_defs (category_id, key, label, input_type, unit, options, required, min_value, max_value, regex, help, is_filterable, in_comparison, in_rfq, position, is_wholesale_only, is_consumer_visible)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
           [id, ...vals],
         );
         changes.push(`added ${a.key}`);
@@ -644,13 +660,158 @@ adminRouter.delete("/team/:id", any, owner, async (req, res) => {
 
 adminRouter.get("/settings", any, async (_req, res) => {
   const sample = await one(db(), `select (select count(*)::int from companies where is_sample) as companies, (select count(*)::int from products where is_sample) as products`);
-  res.json({ sample, payments: env.paymentsDriver, file_link_ttl: env.fileLinkTtl });
+  res.json({ sample, payments: env.paymentsDriver, file_link_ttl: env.fileLinkTtl, platform_fee_pct: await platformFeePct(db()) });
 });
 
 adminRouter.post("/settings/sample-data", any, owner, async (req, res) => {
   const { action } = z.object({ action: z.enum(["remove", "restore"]) }).parse(req.body);
   if (action === "remove") await removeSampleData(db());
-  else await seedSampleData(db(), true);
+  else {
+    await seedSampleData(db(), true);
+    await seedSampleStore(db(), true);
+  }
   await audit(db(), req, `settings.sample_data_${action}`);
+  res.json({ ok: true });
+});
+
+// ---- B2C operations (PRD v2) -------------------------------------------------------------------------
+
+adminRouter.get("/storefronts", any, async (_req, res) => {
+  res.json({
+    storefronts: await many(
+      db(),
+      `select s.id, s.slug, s.name, s.status, s.currency, s.is_sample, s.created_at, coalesce(nullif(c.trading_name,''), c.legal_name) as merchant_name, c.id as company_id,
+              (select count(*)::int from retail_listings rl where rl.storefront_id = s.id and rl.status = 'active') as listings,
+              (select count(*)::int from consumer_orders o where o.storefront_id = s.id) as orders,
+              (select coalesce(sum(total_cents),0)::bigint from consumer_orders o where o.storefront_id = s.id and o.payment_status <> 'refunded') as gmv
+         from storefronts s join companies c on c.id = s.company_id order by s.created_at desc`,
+    ),
+  });
+});
+
+adminRouter.post("/storefronts/:id/status", trust, async (req, res) => {
+  const { status, reason } = z.object({ status: z.enum(["live", "paused"]), reason: z.string().trim().min(3).max(500) }).parse(req.body);
+  const r = await one(db(), `update storefronts set status = $2, updated_at = now() where id = $1 returning id`, [req.params.id, status]);
+  if (!r) throw notFound();
+  await audit(db(), req, `storefront.${status === "live" ? "reopen" : "pause"}`, String(req.params.id), { reason });
+  res.json({ ok: true });
+});
+
+adminRouter.get("/consumer-orders", any, async (req, res) => {
+  const status = req.query.status ? String(req.query.status) : null;
+  res.json({
+    orders: await many(
+      db(),
+      `select o.id, o.ref, o.channel, o.status, o.payment_status, o.total_cents, o.wholesale_cost_cents, o.platform_fee_cents, o.merchant_margin_cents, o.tax_cents, o.currency,
+              o.ship_country, o.created_at, s.name as store_name,
+              exists (select 1 from consumer_issues i where i.order_id = o.id and i.status = 'open') as issue
+         from consumer_orders o join storefronts s on s.id = o.storefront_id where ($1::text is null or o.status = $1) order by o.created_at desc limit 300`,
+      [status],
+    ),
+  });
+});
+
+adminRouter.get("/consumer-orders/:id", any, async (req, res) => {
+  const d = await consumerOrderDetail(String(req.params.id));
+  const { ship_to_enc, contact_enc, ...order } = d.o;
+  // Admins see where a parcel went, not who received it.
+  res.json({ order: { ...order, ship_to: regionOnly(readShipTo(ship_to_enc)) }, lines: d.lines, splits: d.splits, issues: d.issues, role: "admin" });
+});
+
+adminRouter.post("/consumer-orders/:id/refund", finance, async (req, res) => {
+  const b = z.object({ amount_cents: z.coerce.number().int().min(1), reason: z.string().trim().min(3).max(1000) }).parse(req.body);
+  await db().tx(async (q) => {
+    await refundOrder(q, String(req.params.id), b.amount_cents);
+    await audit(q, req, "consumer_order.refund", String(req.params.id), b);
+  });
+  res.json({ ok: true });
+});
+
+adminRouter.get("/splits", finance, async (_req, res) => {
+  res.json({
+    totals: await many(db(), `select party, status, sum(amount_cents)::bigint as total, count(*)::int as n from payout_splits group by party, status order by party, status`),
+    splits: await many(
+      db(),
+      `select sp.id, sp.party, sp.amount_cents, sp.status, sp.gateway_ref, sp.created_at, sp.settled_at, o.id as order_id, o.ref, o.currency,
+              coalesce(nullif(c.trading_name,''), c.legal_name) as company_name
+         from payout_splits sp join consumer_orders o on o.id = sp.order_id left join companies c on c.id = sp.company_id order by sp.id desc limit 500`,
+    ),
+    payments: env.paymentsDriver,
+  });
+});
+
+adminRouter.post("/splits/release-due", finance, async (req, res) => {
+  const n = await db().tx((q) => releaseDue(q));
+  await audit(db(), req, "splits.release_due", "", { orders: n });
+  res.json({ released: n });
+});
+
+/** One desk for every money dispute: B2B escrow disputes, failed AQL inspections, consumer refund claims. */
+adminRouter.get("/arbitration", any, async (_req, res) => {
+  const q = db();
+  res.json({
+    disputes: await many(
+      q,
+      `select d.id, d.order_id, d.reason, d.created_at, o.ref, o.title, o.currency, coalesce(nullif(c.trading_name,''), c.legal_name) as opened_by_name,
+              (select coalesce(sum(case when e.kind like 'fund%' then e.amount_cents else -e.amount_cents end),0)::bigint from escrow_entries e where e.order_id = o.id) as held
+         from disputes d join orders o on o.id = d.order_id join companies c on c.id = d.opened_by_company where d.status = 'open' order by d.created_at`,
+    ),
+    failed_inspections: await many(
+      q,
+      `select i.id, i.order_id, i.lot_size, i.sample_size, i.major_found, i.major_ac, i.minor_found, i.minor_ac, i.critical_found, i.inspector, i.created_at, o.ref, o.title, o.stage,
+              coalesce(nullif(s.trading_name,''), s.legal_name) as supplier_name,
+              (select count(*)::int from inspections x where x.order_id = o.id and x.result = 'fail') as fails
+         from inspections i join orders o on o.id = i.order_id join companies s on s.id = o.supplier_company_id
+        where i.result = 'fail' and o.stage in ('in_production','inspection_requested','disputed')
+          and i.created_at = (select max(created_at) from inspections y where y.order_id = o.id)
+        order by i.created_at`,
+    ),
+    issues: await many(
+      q,
+      `select i.id, i.order_id, i.kind, i.reason, i.created_at, o.ref, o.total_cents, o.currency, o.status as order_status, s.name as store_name,
+              (select coalesce(sum(amount_cents),0)::bigint from payout_splits sp where sp.order_id = o.id and sp.status = 'held') as held
+         from consumer_issues i join consumer_orders o on o.id = i.order_id join storefronts s on s.id = o.storefront_id where i.status = 'open' order by i.created_at`,
+    ),
+  });
+});
+
+adminRouter.post("/issues/:id/resolve", finance, async (req, res) => {
+  const b = z.object({ refund_cents: z.coerce.number().int().min(0), resolution: z.string().trim().min(5, "Record the reasoning").max(2000) }).parse(req.body);
+  await db().tx(async (q) => {
+    const i = await one<{ order_id: string; status: string }>(q, `select order_id, status from consumer_issues where id = $1 for update`, [req.params.id]);
+    if (!i || i.status !== "open") throw conflict("This issue is already resolved");
+    if (b.refund_cents > 0) await refundOrder(q, i.order_id, b.refund_cents);
+    await q.query(`update consumer_issues set status = 'resolved', resolution = $2, refund_cents = $3, resolved_by_kind = 'admin', resolved_by = $4, resolved_at = now() where id = $1`, [
+      req.params.id, b.resolution, b.refund_cents, req.admin!.id,
+    ]);
+    // With nothing refunded and the parcel delivered, the held split goes out now.
+    const o = await one<{ status: string; payment_status: string }>(q, `select status, payment_status from consumer_orders where id = $1`, [i.order_id]);
+    if (b.refund_cents === 0 && o?.status === "delivered" && o.payment_status === "escrow_locked") await releaseOrder(q, i.order_id);
+    await audit(q, req, "consumer_issue.resolve", String(req.params.id), b);
+  });
+  res.json({ ok: true });
+});
+
+adminRouter.get("/reviews", any, async (_req, res) => {
+  res.json({
+    reviews: await many(
+      db(),
+      `select r.id, r.rating, r.title, r.body, r.author_label, r.status, r.merchant_reply, r.created_at, rl.title as listing_title, s.name as store_name
+         from reviews r join retail_listings rl on rl.id = r.retail_listing_id join storefronts s on s.id = rl.storefront_id order by r.created_at desc limit 300`,
+    ),
+  });
+});
+
+adminRouter.post("/reviews/:id/status", trust, async (req, res) => {
+  const { status, reason } = z.object({ status: z.enum(["published", "hidden"]), reason: z.string().trim().min(3).max(500) }).parse(req.body);
+  await db().query(`update reviews set status = $2 where id = $1`, [req.params.id, status]);
+  await audit(db(), req, `review.${status}`, String(req.params.id), { reason });
+  res.json({ ok: true });
+});
+
+adminRouter.put("/settings/platform-fee", finance, async (req, res) => {
+  const { pct } = z.object({ pct: z.coerce.number().min(0).max(40) }).parse(req.body);
+  await db().query(`insert into settings (key, value) values ('platform_fee_pct', $1) on conflict (key) do update set value = excluded.value, updated_at = now()`, [JSON.stringify(pct)]);
+  await audit(db(), req, "settings.platform_fee", "", { pct });
   res.json({ ok: true });
 });

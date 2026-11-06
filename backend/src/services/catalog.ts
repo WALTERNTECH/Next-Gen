@@ -21,6 +21,9 @@ export type AttributeDef = {
   is_filterable: boolean;
   in_comparison: boolean;
   in_rfq: boolean;
+  /** Channel visibility (PRD v2 section 4): upstream-only, or shown on consumer storefronts. */
+  is_wholesale_only: boolean;
+  is_consumer_visible: boolean;
   position: number;
 };
 export type EffectiveAttribute = AttributeDef & { inherited: boolean; source_name: string };
@@ -45,7 +48,7 @@ export const slugify = (s: string) =>
     .replace(/[\s_-]+/g, "-")
     .slice(0, 60) || "category";
 
-export const ATTR_COLS = `id, category_id, key, label, input_type, unit, options, required, min_value, max_value, regex, help, is_filterable, in_comparison, in_rfq, position`;
+export const ATTR_COLS = `id, category_id, key, label, input_type, unit, options, required, min_value, max_value, regex, help, is_filterable, in_comparison, in_rfq, is_wholesale_only, is_consumer_visible, position`;
 
 /** Root first, the category itself last. */
 export async function ancestry(q: Q, categoryId: string): Promise<Category[]> {
@@ -195,6 +198,7 @@ export function checkDefinition(d: Partial<AttributeDef>): void {
   if (!d.key || !/^[a-z][a-z0-9_]{1,47}$/.test(d.key)) throw badRequest(`"${d.label}": the key must be lower case letters, digits and underscores`);
   if ((d.input_type === "select" || d.input_type === "multiselect") && !(d.options?.length)) throw badRequest(`"${d.label}" needs at least one option`);
   if (d.min_value != null && d.max_value != null && d.min_value > d.max_value) throw badRequest(`"${d.label}": the minimum is above the maximum`);
+  if (d.is_wholesale_only && d.is_consumer_visible) throw badRequest(`"${d.label}": an attribute can't be wholesale-only and consumer-facing`);
   if (d.regex) {
     try {
       new RegExp(d.regex);

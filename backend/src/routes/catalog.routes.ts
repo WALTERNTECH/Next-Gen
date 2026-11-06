@@ -152,7 +152,7 @@ catalogRouter.get("/products", async (req, res) => {
   const rows = await many(
     q,
     `${LIVE}
-     select p.id, p.title, p.unit, p.moq, p.lead_time_days, p.swatch, p.image_ids[1] as image_id, p.attributes, p.is_sample, p.sample_available,
+     select p.id, p.title, p.unit, p.moq, p.lead_time_days, p.swatch, p.image_ids[1] as image_id, p.attributes, p.is_sample, p.sample_available, p.dropship_enabled, p.dropship_price_cents,
             ${MIN_PRICE} as price_min, ${MAX_PRICE} as price_max, p.currency, p.category_id, cat.name as category_name,
             co.id as supplier_id, coalesce(nullif(co.trading_name,''), co.legal_name) as supplier_name, co.kind as supplier_kind, co.country as supplier_country, co.tier,
             coalesce((select array_agg(distinct ce.standard) from certifications ce where ce.company_id = co.id and ce.status = 'approved' and (ce.valid_until is null or ce.valid_until >= current_date)), '{}') as certifications
@@ -310,6 +310,8 @@ const productBody = z.object({
   image_ids: z.array(z.string().uuid()).max(8).default([]),
   swatch: z.string().regex(/^#[0-9a-f]{6}$/i).nullable().optional(),
   status: z.enum(["draft", "active"]).default("draft"),
+  dropship_enabled: z.boolean().default(false),
+  dropship_price_cents: z.coerce.number().int().min(1).nullable().optional(),
 });
 
 async function checkProduct(q: Q, b: z.infer<typeof productBody>, companyId: string) {
@@ -330,6 +332,7 @@ async function checkProduct(q: Q, b: z.infer<typeof productBody>, companyId: str
   tiers[0].min_qty = Math.min(tiers[0].min_qty, b.moq);
   for (let i = 1; i < tiers.length; i++) if (tiers[i].min_qty === tiers[i - 1].min_qty) throw badRequest("Two price tiers start at the same quantity");
   if (b.sample_available && b.sample_price_cents == null) throw badRequest("Set a sample price, or 0 for free samples");
+  if (b.dropship_enabled && !b.dropship_price_cents) throw badRequest("Set the per-unit dropship price");
   const sv = await one<{ schema_version: number }>(q, `select schema_version from categories where id = $1`, [b.category_id]);
   return { values, tiers, schemaVersion: sv!.schema_version };
 }
@@ -339,11 +342,12 @@ supplierRouter.post("/products", async (req, res) => {
   const { values, tiers, schemaVersion } = await checkProduct(db(), b, req.user!.company_id);
   const p = await one<{ id: string }>(
     db(),
-    `insert into products (company_id, category_id, title, description, attributes, schema_version, unit, moq, moq_matrix, price_tiers, currency, lead_time_days, sample_available, sample_price_cents, image_ids, swatch, status)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::uuid[],$16,$17) returning id`,
+    `insert into products (company_id, category_id, title, description, attributes, schema_version, unit, moq, moq_matrix, price_tiers, currency, lead_time_days, sample_available, sample_price_cents, image_ids, swatch, status, dropship_enabled, dropship_price_cents)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::uuid[],$16,$17,$18,$19) returning id`,
     [
       req.user!.company_id, b.category_id, b.title, b.description, JSON.stringify(values), schemaVersion, b.unit, b.moq, JSON.stringify(b.moq_matrix),
       JSON.stringify(tiers), b.currency, b.lead_time_days ?? null, b.sample_available, b.sample_available ? b.sample_price_cents : null, b.image_ids, b.swatch ?? null, b.status,
+      b.dropship_enabled, b.dropship_enabled ? b.dropship_price_cents : null,
     ],
   );
   await audit(db(), req, "product.create", p!.id, { status: b.status });
@@ -357,10 +361,11 @@ supplierRouter.put("/products/:id", async (req, res) => {
   const { values, tiers, schemaVersion } = await checkProduct(db(), b, req.user!.company_id);
   await db().query(
     `update products set category_id=$2, title=$3, description=$4, attributes=$5, schema_version=$6, unit=$7, moq=$8, moq_matrix=$9, price_tiers=$10, currency=$11,
-       lead_time_days=$12, sample_available=$13, sample_price_cents=$14, image_ids=$15::uuid[], swatch=$16, status=$17, updated_at=now() where id = $1`,
+       lead_time_days=$12, sample_available=$13, sample_price_cents=$14, image_ids=$15::uuid[], swatch=$16, status=$17, dropship_enabled=$18, dropship_price_cents=$19, updated_at=now() where id = $1`,
     [
       req.params.id, b.category_id, b.title, b.description, JSON.stringify(values), schemaVersion, b.unit, b.moq, JSON.stringify(b.moq_matrix), JSON.stringify(tiers),
       b.currency, b.lead_time_days ?? null, b.sample_available, b.sample_available ? b.sample_price_cents : null, b.image_ids, b.swatch ?? null, b.status,
+      b.dropship_enabled, b.dropship_enabled ? b.dropship_price_cents : null,
     ],
   );
   await audit(db(), req, "product.update", String(req.params.id), { status: b.status });

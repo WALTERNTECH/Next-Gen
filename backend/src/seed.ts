@@ -44,6 +44,9 @@ type A = {
   compare?: boolean;
   rfq?: boolean;
 };
+
+/** Upstream-only attributes (PRD v2 section 3): raw fabric specs and sourcing terms never reach consumers. */
+const WHOLESALE_ONLY = new Set(["composition", "fibers", "gsm", "cuttable_width", "yarn_count", "shrinkage", "test_report", "customization", "size_chart"]);
 type C = { name: string; status: "draft" | "active" | "archived"; attrs?: A[]; children?: C[]; description?: string };
 
 const COUNTRIES = ["Bangladesh", "China", "Egypt", "Ethiopia", "India", "Indonesia", "Italy", "Kenya", "Mauritius", "Morocco", "Pakistan", "Portugal", "Sri Lanka", "Turkey", "Vietnam", "United States", "Germany", "Japan", "South Korea", "Taiwan"];
@@ -99,6 +102,7 @@ const TREE: C[] = [
           { key: "garment_gsm", label: "Fabric Weight", type: "float", unit: "GSM", min: 60, max: 900, filter: true, compare: true, rfq: true },
           { key: "sizes", label: "Size Range", type: "multiselect", options: ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL"], filter: true, compare: true, rfq: true },
           { key: "size_chart", label: "Size Chart / Spec Sheet", type: "file" },
+          { key: "care_instructions", label: "Care Instructions", type: "text", compare: true, help: "Shown to consumers, e.g. Machine wash 30°C, do not tumble dry" },
         ],
         children: [
           {
@@ -160,9 +164,9 @@ async function insertTree(q: Q, nodes: C[], parent: string | null, depth: number
     let i = 0;
     for (const a of n.attrs ?? [])
       await q.query(
-        `insert into attribute_defs (category_id, key, label, input_type, unit, options, required, min_value, max_value, regex, help, is_filterable, in_comparison, in_rfq, position)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-        [c!.id, a.key, a.label, a.type, a.unit ?? null, JSON.stringify(a.options ?? []), a.required ?? false, a.min ?? null, a.max ?? null, a.regex ?? null, a.help ?? "", a.filter ?? false, a.compare ?? false, a.rfq ?? false, i++],
+        `insert into attribute_defs (category_id, key, label, input_type, unit, options, required, min_value, max_value, regex, help, is_filterable, in_comparison, in_rfq, position, is_wholesale_only, is_consumer_visible)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        [c!.id, a.key, a.label, a.type, a.unit ?? null, JSON.stringify(a.options ?? []), a.required ?? false, a.min ?? null, a.max ?? null, a.regex ?? null, a.help ?? "", a.filter ?? false, a.compare ?? false, a.rfq ?? false, i++, WHOLESALE_ONLY.has(a.key), !WHOLESALE_ONLY.has(a.key)],
       );
     if (n.children) await insertTree(q, n.children, c!.id, depth + 1);
   }
@@ -180,6 +184,7 @@ export async function seedBase(db: Db, log: (m: string) => void = () => {}) {
     await q.query(`insert into settings (key, value) values ('taxonomy_seeded', 'true') on conflict do nothing`);
   });
   if (!(await one(db, `select 1 from settings where key = 'sample_seeded'`))) await seedSampleData(db, false, log);
+  if (!(await one(db, `select 1 from settings where key = 'sample_store_seeded'`))) await seedSampleStore(db, false, log);
 }
 
 // ---- Sample suppliers and listings ------------------------------------------------------------------
@@ -290,6 +295,17 @@ const PRODUCTS: (SP & { company: (typeof COMPANIES)[number]["key"] })[] = [
   },
 ];
 
+/** Per-unit dropship prices for sample finished goods (fabrics are bulk only). */
+const DROPSHIP: Record<string, number> = {
+  "Heavyweight blank tee, 220 GSM": 650,
+  "Custom pullover hoodie, full CMT": 1600,
+  "Screen-printed promo tee": 420,
+  "Polo shirt, pique, custom embroidery": 980,
+  "Crewneck sweatshirt, blank": 1250,
+  "Over-ear ANC headphones, private label": 2700,
+  "On-ear wireless headphones, kids volume-limited": 1200,
+};
+
 export async function seedSampleData(db: Db, force: boolean, log: (m: string) => void = () => {}) {
   await db.tx(async (q) => {
     await q.query(`select pg_advisory_xact_lock(hashtext('nextgen.seed-sample'))`);
@@ -323,13 +339,13 @@ export async function seedSampleData(db: Db, force: boolean, log: (m: string) =>
       const cat = find(p.category);
       if (!cat) continue;
       await q.query(
-        `insert into products (company_id, category_id, title, description, attributes, unit, moq, moq_matrix, price_tiers, lead_time_days, sample_available, sample_price_cents, swatch, status, is_sample)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'active',true)`,
+        `insert into products (company_id, category_id, title, description, attributes, unit, moq, moq_matrix, price_tiers, lead_time_days, sample_available, sample_price_cents, swatch, status, is_sample, dropship_enabled, dropship_price_cents)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'active',true,$14,$15)`,
         [
           ids.get(p.company), cat, p.title, p.description, JSON.stringify(p.attrs), p.unit, p.moq,
           JSON.stringify((p.matrix ?? []).map(([size, color, min_qty]) => ({ size, color, min_qty }))),
           JSON.stringify(p.tiers.map(([min_qty, unit_price_cents]) => ({ min_qty, unit_price_cents }))),
-          p.lead, p.sample != null, p.sample, p.swatch,
+          p.lead, p.sample != null, p.sample, p.swatch, DROPSHIP[p.title] != null, DROPSHIP[p.title] ?? null,
         ],
       );
       n++;
@@ -339,15 +355,102 @@ export async function seedSampleData(db: Db, force: boolean, log: (m: string) =>
   });
 }
 
-/** Removes sample suppliers and their listings. Sample companies that already trade are suspended instead. */
+/**
+ * Removes sample suppliers, the sample store and their listings. Anything real trade points at
+ * (an RFQ, an order, a consumer order, a review) is switched off instead of deleted.
+ */
 export async function removeSampleData(db: Db) {
   await db.tx(async (q) => {
-    const traded = await many<{ id: string }>(q, `select id from companies c where is_sample and (exists (select 1 from orders o where o.supplier_company_id = c.id) or exists (select 1 from rfqs r where r.target_company_id = c.id) or exists (select 1 from proposals p where p.supplier_company_id = c.id))`);
-    const keep = traded.map((t) => t.id);
-    await q.query(`update products set status = 'removed' where is_sample and company_id = any($1::uuid[])`, [keep]);
-    await q.query(`update companies set status = 'deleted' where id = any($1::uuid[])`, [keep]);
-    await q.query(`delete from products where is_sample and not (company_id = any($1::uuid[]))`, [keep]);
-    await q.query(`delete from certifications where company_id in (select id from companies where is_sample and not (id = any($1::uuid[])))`, [keep]);
-    await q.query(`delete from companies where is_sample and not (id = any($1::uuid[]))`, [keep]);
+    const sampleStores = `(select id from storefronts where is_sample)`;
+    const sampleProducts = `(select id from products where is_sample)`;
+    await q.exec(`
+      delete from retail_listings rl where (rl.storefront_id in ${sampleStores} or rl.product_id in ${sampleProducts})
+        and not exists (select 1 from consumer_order_lines l where l.retail_listing_id = rl.id)
+        and not exists (select 1 from reviews r where r.retail_listing_id = rl.id);
+      update retail_listings set status = 'removed' where storefront_id in ${sampleStores} or product_id in ${sampleProducts};
+      delete from storefronts s where s.is_sample and not exists (select 1 from retail_listings where storefront_id = s.id) and not exists (select 1 from consumer_orders where storefront_id = s.id);
+      update storefronts set status = 'paused' where is_sample;
+      delete from products p where p.is_sample
+        and not exists (select 1 from rfqs where product_id = p.id)
+        and not exists (select 1 from retail_listings where product_id = p.id)
+        and not exists (select 1 from consumer_order_lines where product_id = p.id);
+      update products set status = 'removed' where is_sample;
+      delete from certifications where company_id in (select id from companies where is_sample);
+      delete from companies c where c.is_sample
+        and not exists (select 1 from products where company_id = c.id)
+        and not exists (select 1 from orders where buyer_company_id = c.id or supplier_company_id = c.id)
+        and not exists (select 1 from rfqs where buyer_company_id = c.id or target_company_id = c.id)
+        and not exists (select 1 from proposals where supplier_company_id = c.id)
+        and not exists (select 1 from storefronts where company_id = c.id)
+        and not exists (select 1 from retail_listings where merchant_company_id = c.id)
+        and not exists (select 1 from consumer_order_lines where supplier_company_id = c.id)
+        and not exists (select 1 from users where company_id = c.id)
+        and not exists (select 1 from files where owner_company_id = c.id);
+      update companies set status = 'deleted' where is_sample;
+    `);
+  });
+}
+
+// ---- B2B2C upgrade and sample storefront -----------------------------------------------------------
+
+const CARE: Record<string, string> = {
+  "Heavyweight blank tee, 220 GSM": "Machine wash 30°C inside out. Do not tumble dry. Iron on reverse.",
+  "Custom pullover hoodie, full CMT": "Machine wash 30°C. Do not bleach. Dry flat.",
+  "Screen-printed promo tee": "Machine wash 30°C inside out. Do not iron print.",
+  "Polo shirt, pique, custom embroidery": "Machine wash 40°C. Iron on medium heat, avoid embroidery.",
+  "Crewneck sweatshirt, blank": "Machine wash 30°C. Do not tumble dry.",
+};
+
+const STORE_LISTINGS: [string, number, number | null][] = [
+  ["Heavyweight blank tee, 220 GSM", 2400, 2900],
+  ["Custom pullover hoodie, full CMT", 5800, null],
+  ["Polo shirt, pique, custom embroidery", 3200, null],
+  ["Crewneck sweatshirt, blank", 4500, 5200],
+  ["Over-ear ANC headphones, private label", 8900, 11900],
+  ["On-ear wireless headphones, kids volume-limited", 3500, null],
+];
+
+/** Gives sample products their dropship prices and care instructions, and opens the sample store. */
+export async function seedSampleStore(db: Db, force: boolean, log: (m: string) => void = () => {}) {
+  await db.tx(async (q) => {
+    await q.query(`select pg_advisory_xact_lock(hashtext('nextgen.seed-store'))`);
+    if (!force && (await one(q, `select 1 from settings where key = 'sample_store_seeded'`))) return;
+    if (await one(q, `select 1 from storefronts where is_sample and status <> 'paused' limit 1`)) return;
+    for (const [title, cents] of Object.entries(DROPSHIP))
+      await q.query(`update products set dropship_enabled = true, dropship_price_cents = $2 where is_sample and title = $1 and dropship_price_cents is null`, [title, cents]);
+    for (const [title, care] of Object.entries(CARE))
+      await q.query(`update products set attributes = attributes || jsonb_build_object('care_instructions', $2::text) where is_sample and title = $1 and not attributes ? 'care_instructions'`, [title, care]);
+    const products = await many<{ id: string; title: string; description: string; attributes: Record<string, unknown> }>(
+      q,
+      `select id, title, description, attributes from products where is_sample and status = 'active' and dropship_enabled`,
+    );
+    if (!products.length) return;
+    const c = await one<{ id: string }>(
+      q,
+      `insert into companies (kind, legal_name, trading_name, country, city, registration_no, tier, verification_status, verified_at, is_sample, about)
+       values ('buyer', 'Kilele Basics', 'Kilele Basics', 'Kenya', 'Nairobi', 'SAMPLE', 2, 'verified', now(), true, 'Sample merchant: a retail brand that dropships wholesale catalog items.') returning id`,
+    );
+    const s = await one<{ id: string }>(
+      q,
+      `insert into storefronts (company_id, slug, name, tagline, about, accent, currency, prices_include_tax, default_tax_pct, tax_rules, shipping_flat_cents, free_shipping_over_cents,
+         handling_days, transit_days, return_policy, status, is_sample)
+       values ($1, 'kilele-basics', 'Kilele Basics', 'Everyday basics, made to order.', 'Sample store. Orders here run the full flow in test mode; no money moves.', '#1f3b2d', 'USD', false, 0,
+         $2, 600, 8000, 2, 5, 'Returns within 30 days of delivery, unworn and with tags.', 'live', true) returning id`,
+      [c!.id, JSON.stringify([{ country: "Kenya", rate: 16 }, { country: "United Kingdom", rate: 20 }, { country: "Germany", rate: 19 }, { country: "United States", rate: 0 }])],
+    );
+    let n = 0;
+    for (const [title, price, compare] of STORE_LISTINGS) {
+      const p = products.find((x) => x.title === title);
+      if (!p) continue;
+      const sizes = Array.isArray(p.attributes.sizes) ? (p.attributes.sizes as string[]) : [];
+      await q.query(
+        `insert into retail_listings (storefront_id, merchant_company_id, product_id, title, description, retail_price_cents, compare_at_cents, is_dropshipped, options)
+         values ($1,$2,$3,$4,$5,$6,$7,true,$8)`,
+        [s!.id, c!.id, p.id, title.replace(/, (blank|full CMT|private label|custom embroidery)$/i, ""), p.description, price, compare, JSON.stringify(sizes.length ? [{ name: "Size", values: sizes }] : [])],
+      );
+      n++;
+    }
+    await q.query(`insert into settings (key, value) values ('sample_store_seeded', 'true') on conflict (key) do update set value = 'true', updated_at = now()`);
+    log(`sample store: ${n} listings`);
   });
 }

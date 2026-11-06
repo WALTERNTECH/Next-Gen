@@ -367,4 +367,192 @@ ${TABLES.map((t) => `alter table ${t} enable row level security;`).join("\n")}
     id: "002_rls_schema_migrations",
     sql: `alter table schema_migrations enable row level security;`,
   },
+  {
+    // B2B2C (PRD v2): merchants publish wholesale products to their own storefronts, consumers buy
+    // single items, dropshipped lines are fulfilled by the supplier, and every consumer payment is
+    // split between supplier cost, platform fee and merchant margin.
+    id: "003_b2b2c",
+    sql: `
+-- Channel visibility on attributes (PRD 4).
+alter table attribute_defs
+  add column is_wholesale_only boolean not null default false,
+  add column is_consumer_visible boolean not null default true;
+alter table attribute_defs add constraint attribute_channel check (not (is_wholesale_only and is_consumer_visible));
+-- Raw fabric specs and sourcing terms stay upstream.
+update attribute_defs set is_wholesale_only = true, is_consumer_visible = false
+ where key in ('composition','fibers','gsm','cuttable_width','yarn_count','shrinkage','test_report','customization','size_chart');
+insert into attribute_defs (category_id, key, label, input_type, help, in_comparison, position, is_consumer_visible)
+select id, 'care_instructions', 'Care Instructions', 'text', 'Shown to consumers, e.g. Machine wash 30°C, do not tumble dry', true, 20, true
+  from categories where slug = 'finished-garments' and depth = 2
+on conflict do nothing;
+
+-- Suppliers opt listings into dropshipping at a per-unit dropship price.
+alter table products add column dropship_enabled boolean not null default false, add column dropship_price_cents bigint;
+
+create table storefronts (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null unique references companies(id),
+  slug text not null unique check (slug ~ '^[a-z0-9][a-z0-9-]{2,40}$'),
+  name text not null,
+  tagline text not null default '',
+  about text not null default '',
+  accent text not null default '#141414',
+  currency text not null default 'USD',
+  prices_include_tax boolean not null default false,
+  default_tax_pct numeric(5,2) not null default 0,
+  tax_rules jsonb not null default '[]',
+  shipping_flat_cents bigint not null default 0,
+  free_shipping_over_cents bigint,
+  handling_days int not null default 2,
+  transit_days int not null default 5,
+  return_policy text not null default '',
+  status text not null default 'draft' check (status in ('draft','live','paused')),
+  is_sample boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table retail_listings (
+  id uuid primary key default gen_random_uuid(),
+  storefront_id uuid not null references storefronts(id),
+  merchant_company_id uuid not null references companies(id),
+  product_id uuid not null references products(id),
+  title text not null,
+  description text not null default '',
+  retail_price_cents bigint not null check (retail_price_cents > 0),
+  compare_at_cents bigint,
+  is_dropshipped boolean not null default true,
+  stock int not null default 0 check (stock >= 0),
+  options jsonb not null default '[]',
+  status text not null default 'active' check (status in ('active','paused','removed')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (storefront_id, product_id)
+);
+
+-- Consumers are platform accounts. Their PII is sealed (AES-256-GCM); email is found by hash.
+create table consumers (
+  id uuid primary key default gen_random_uuid(),
+  email_hash text not null unique,
+  email_enc text not null,
+  name_enc text not null,
+  password_hash text not null,
+  token_version int not null default 0,
+  status text not null default 'active' check (status in ('active','deleted')),
+  failed_logins int not null default 0,
+  locked_until timestamptz,
+  last_login_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table consumer_orders (
+  id uuid primary key default gen_random_uuid(),
+  ref text not null unique,
+  storefront_id uuid not null references storefronts(id),
+  merchant_company_id uuid not null references companies(id),
+  consumer_id uuid references consumers(id),
+  channel text not null default 'storefront' check (channel in ('storefront','api')),
+  external_ref text,
+  currency text not null default 'USD',
+  subtotal_cents bigint not null,
+  shipping_cents bigint not null default 0,
+  tax_cents bigint not null default 0,
+  total_cents bigint not null,
+  wholesale_cost_cents bigint not null,
+  platform_fee_cents bigint not null,
+  merchant_margin_cents bigint not null,
+  payment_status text not null default 'escrow_locked' check (payment_status in ('escrow_locked','released','partially_refunded','refunded')),
+  status text not null default 'paid' check (status in ('paid','shipped','delivered','cancelled','refunded')),
+  ship_to_enc text not null,
+  contact_enc text not null,
+  ship_city text not null default '',
+  ship_country text not null default '',
+  gateway_ref text not null,
+  shipped_at timestamptz,
+  delivered_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index consumer_orders_merchant on consumer_orders (merchant_company_id, created_at desc);
+create index consumer_orders_consumer on consumer_orders (consumer_id, created_at desc);
+
+create table consumer_order_lines (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references consumer_orders(id),
+  retail_listing_id uuid not null references retail_listings(id),
+  product_id uuid not null references products(id),
+  supplier_company_id uuid not null references companies(id),
+  title text not null,
+  option text not null default '',
+  qty int not null check (qty > 0),
+  unit_price_cents bigint not null,
+  unit_cost_cents bigint not null,
+  is_dropshipped boolean not null,
+  fulfilment text not null default 'pending' check (fulfilment in ('pending','shipped','delivered','cancelled')),
+  tracking text not null default '',
+  shipped_at timestamptz
+);
+create index consumer_lines_supplier on consumer_order_lines (supplier_company_id, is_dropshipped, fulfilment);
+
+-- The split ledger: one row per party per order, held until delivery, then released (or reversed on refund).
+create table payout_splits (
+  id bigint generated always as identity primary key,
+  order_id uuid not null references consumer_orders(id),
+  party text not null check (party in ('supplier','merchant','platform','tax','refund')),
+  company_id uuid references companies(id),
+  amount_cents bigint not null check (amount_cents >= 0),
+  status text not null default 'held' check (status in ('held','released','reversed','paid')),
+  gateway_ref text not null,
+  created_at timestamptz not null default now(),
+  settled_at timestamptz
+);
+create index payout_splits_order on payout_splits (order_id);
+create index payout_splits_company on payout_splits (company_id, status);
+
+create table reviews (
+  id uuid primary key default gen_random_uuid(),
+  retail_listing_id uuid not null references retail_listings(id),
+  product_id uuid not null references products(id),
+  consumer_id uuid references consumers(id),
+  order_line_id uuid not null unique references consumer_order_lines(id),
+  rating int not null check (rating between 1 and 5),
+  title text not null default '',
+  body text not null default '',
+  author_label text not null,
+  status text not null default 'published' check (status in ('published','hidden')),
+  merchant_reply text,
+  created_at timestamptz not null default now()
+);
+
+create table consumer_issues (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references consumer_orders(id),
+  kind text not null check (kind in ('not_received','damaged','not_as_described','other')),
+  reason text not null,
+  status text not null default 'open' check (status in ('open','resolved')),
+  resolution text,
+  refund_cents bigint,
+  resolved_by_kind text,
+  resolved_by uuid,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+-- Headless API keys for external storefronts (Shopify, WooCommerce, custom).
+create table api_keys (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references companies(id),
+  name text not null,
+  prefix text not null,
+  key_hash text not null unique,
+  last_used_at timestamptz,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+insert into settings (key, value) values ('platform_fee_pct', '10') on conflict do nothing;
+
+${["storefronts", "retail_listings", "consumers", "consumer_orders", "consumer_order_lines", "payout_splits", "reviews", "consumer_issues", "api_keys"].map((t) => `alter table ${t} enable row level security;`).join("\n")}
+`,
+  },
 ];

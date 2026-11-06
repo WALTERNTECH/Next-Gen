@@ -10,14 +10,14 @@ export const hashPassword = (pw: string) => bcrypt.hash(pw, 11);
 export const verifyPassword = (pw: string, hash: string) => bcrypt.compare(pw, hash);
 export const sha256 = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 
-export type SessionClaims = { sub: string; tv: number; aud: "user" | "admin"; mfa?: boolean };
+export type SessionClaims = { sub: string; tv: number; aud: "user" | "admin" | "consumer"; mfa?: boolean };
 
 /** User sessions last 7 days; admin sessions 12 hours, and only 10 minutes before the authenticator step. */
-export function signSession(aud: "user" | "admin", id: string, tv: number, mfa = false): string {
-  const expiresIn = aud === "user" ? "7d" : mfa ? "12h" : "10m";
+export function signSession(aud: SessionClaims["aud"], id: string, tv: number, mfa = false): string {
+  const expiresIn = aud === "consumer" ? "30d" : aud === "user" ? "7d" : mfa ? "12h" : "10m";
   return jwt.sign({ tv, mfa }, env.jwtSecret, { subject: id, audience: aud, expiresIn });
 }
-export function verifySession(token: string, aud: "user" | "admin"): SessionClaims | null {
+export function verifySession(token: string, aud: SessionClaims["aud"]): SessionClaims | null {
   try {
     return jwt.verify(token, env.jwtSecret, { audience: aud }) as SessionClaims;
   } catch {

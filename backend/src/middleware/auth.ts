@@ -97,7 +97,8 @@ export function requireAdmin(...roles: AdminRole[]) {
  * the X-NG header, which a browser only sends cross-origin after a CORS preflight we never allow.
  */
 export function csrfGuard(req: Request, _res: Response, next: NextFunction) {
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  // The headless API authenticates with a bearer key, never a cookie.
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method) || req.path.startsWith("/v1/")) return next();
   if (req.get("x-ng") !== "1") throw forbidden("Missing request header", "csrf");
   next();
 }
