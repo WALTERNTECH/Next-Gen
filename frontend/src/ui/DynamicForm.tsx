@@ -20,6 +20,8 @@ export type Attr = {
   is_filterable: boolean;
   in_comparison: boolean;
   in_rfq: boolean;
+  is_wholesale_only?: boolean;
+  is_consumer_visible?: boolean;
   inherited?: boolean;
   source_name?: string;
 };

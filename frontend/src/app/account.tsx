@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, ClipboardList, Download, FileText, Inbox, KeyRound, Lock, Package, Plus, ShieldCheck, Smartphone, Trash2, Wallet } from "lucide-react";
+import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, ClipboardList, Download, FileText, Inbox, KeyRound, Lock, Package, Plus, ShieldCheck, Smartphone, Store, Trash2, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, openFile, type UploadedFile } from "../lib/api";
@@ -88,6 +88,60 @@ export function Dashboard() {
                     {data.proposals_waiting} proposal{data.proposals_waiting === 1 ? "" : "s"} to review
                   </b>
                   <small>Across {data.rfqs_open} open RFQs</small>
+                </span>
+                <ArrowRight className="arrow" />
+              </Link>
+            ) : null}
+            {supplier && data.dropship_to_ship ? (
+              <Link to="/dropship">
+                <span className="q-ic wait">
+                  <ClipboardList />
+                </span>
+                <span className="grow">
+                  <b>
+                    {data.dropship_to_ship} dropship parcel{data.dropship_to_ship === 1 ? "" : "s"} to ship
+                  </b>
+                  <small>Consumer orders from merchant storefronts</small>
+                </span>
+                <ArrowRight className="arrow" />
+              </Link>
+            ) : null}
+            {!supplier && data.retail?.to_ship ? (
+              <Link to="/store/orders">
+                <span className="q-ic wait">
+                  <ClipboardList />
+                </span>
+                <span className="grow">
+                  <b>
+                    {data.retail.to_ship} consumer order{data.retail.to_ship === 1 ? "" : "s"} to ship from your stock
+                  </b>
+                  <small>Storefront</small>
+                </span>
+                <ArrowRight className="arrow" />
+              </Link>
+            ) : null}
+            {!supplier && data.retail?.issues ? (
+              <Link to="/store/orders">
+                <span className="q-ic bad">
+                  <AlertTriangle />
+                </span>
+                <span className="grow">
+                  <b>
+                    {data.retail.issues} consumer problem report{data.retail.issues === 1 ? "" : "s"}
+                  </b>
+                  <small>Refund, or the platform decides</small>
+                </span>
+                <ArrowRight className="arrow" />
+              </Link>
+            ) : null}
+            {!supplier && data.retail && !data.retail.store_status ? (
+              <Link to="/store">
+                <span className="q-ic">
+                  <Store />
+                </span>
+                <span className="grow">
+                  <b>Open a storefront</b>
+                  <small>Sell catalog items to consumers; dropshipped items ship from the supplier</small>
                 </span>
                 <ArrowRight className="arrow" />
               </Link>

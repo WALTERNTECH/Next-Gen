@@ -1,4 +1,4 @@
-import { BadgeCheck, Boxes, Building2, ClipboardList, Columns3, FilePlus2, Gauge, Inbox, KeyRound, LayoutGrid, Lock, Package, PackagePlus, ShieldCheck, ShoppingBag, Store, UserCog, Wallet } from "lucide-react";
+import { BadgeCheck, Banknote, Boxes, Building2, ClipboardList, Columns3, FilePlus2, Gauge, Inbox, KeyRound, LayoutGrid, Lock, Package, PackagePlus, Plug, Settings2, ShieldCheck, ShoppingBag, ShoppingCart, Star, Store, Tags, Truck, UserCog, Wallet } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
@@ -9,6 +9,8 @@ import { Certifications, Company, Dashboard, Payout, Privacy, Security } from ".
 import { isSupplier, useSession } from "./Auth";
 import { Catalog, Compare, ProductPage, SupplierProfile } from "./catalog";
 import { MyProducts, ProductEditor } from "./products";
+import { ApiAccess, ConsumerOrderPage, ConsumerOrders, Payouts, Reviews, RetailListings, StoreSettings } from "./merchant";
+import { Dropship } from "./dropship";
 import { OrderPage, Orders, RfqDetail, RfqNew, Rfqs } from "./trade";
 
 // The signed-in company's workspace. Buyers and suppliers share the frame; the menu and routes
@@ -51,7 +53,20 @@ function navFor(kind: string): NavGroup[] {
         items: [
           { to: "/rfqs", label: "RFQs", icon: Inbox, badge: "proposals" },
           { to: "/rfqs/new", label: "New RFQ", icon: FilePlus2, end: true },
-          { to: "/orders", label: "Orders", icon: ClipboardList, badge: "orders" },
+          { to: "/orders", label: "Wholesale orders", icon: ClipboardList, badge: "orders" },
+        ],
+      },
+      {
+        id: "retail",
+        label: "Storefront",
+        icon: Store,
+        items: [
+          { to: "/store", label: "Store settings", icon: Settings2, end: true },
+          { to: "/store/listings", label: "Retail listings", icon: Tags },
+          { to: "/store/orders", label: "Consumer orders", icon: ShoppingCart, badge: "to_ship" },
+          { to: "/store/payouts", label: "Retail payouts", icon: Banknote },
+          { to: "/store/reviews", label: "Reviews", icon: Star },
+          { to: "/store/api", label: "API and sync", icon: Plug },
         ],
       },
       account,
@@ -63,7 +78,8 @@ function navFor(kind: string): NavGroup[] {
       icon: Store,
       items: [
         { to: "/rfqs", label: "RFQ inbox", icon: Inbox, badge: "rfqs" },
-        { to: "/orders", label: "Orders", icon: ClipboardList, badge: "orders" },
+        { to: "/orders", label: "Wholesale orders", icon: ClipboardList, badge: "orders" },
+        { to: "/dropship", label: "Dropship orders", icon: Truck, badge: "dropship" },
       ],
     },
     {
@@ -96,6 +112,8 @@ export function Workspace() {
         verification: { n: d.company.verification_status === "unsubmitted" || d.company.verification_status === "rejected" ? 1 : 0, tone: d.company.verification_status === "rejected" ? "bad" : "wait" },
         payout: { n: d.payout_set === false ? 1 : 0, tone: "wait" },
         mfa: { n: me?.user.mfa ? 0 : 1, tone: "wait" },
+        to_ship: { n: d.retail?.to_ship ?? 0, tone: "wait" },
+        dropship: { n: d.dropship_to_ship ?? 0, tone: "wait" },
       });
     } catch {
       /* badges are a convenience */
@@ -178,6 +196,14 @@ export function Workspace() {
         <Route path="payout" element={<Payout />} />
         <Route path="security" element={<Security />} />
         <Route path="privacy" element={<Privacy />} />
+        <Route path="store" element={supplier ? <Navigate to="/" replace /> : <StoreSettings />} />
+        <Route path="store/listings" element={supplier ? <Navigate to="/" replace /> : <RetailListings />} />
+        <Route path="store/orders" element={supplier ? <Navigate to="/" replace /> : <ConsumerOrders />} />
+        <Route path="store/orders/:id" element={supplier ? <Navigate to="/" replace /> : <ConsumerOrderPage />} />
+        <Route path="store/payouts" element={supplier ? <Navigate to="/" replace /> : <Payouts />} />
+        <Route path="store/reviews" element={supplier ? <Navigate to="/" replace /> : <Reviews />} />
+        <Route path="store/api" element={supplier ? <Navigate to="/" replace /> : <ApiAccess />} />
+        <Route path="dropship" element={supplier ? <Dropship /> : <Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Shell>

@@ -538,6 +538,7 @@ function AttrRow({ a, inherited, index, state, usage, canEdit, onEdit, onDelete,
           {a.is_filterable ? <span className="chip">Filterable</span> : null}
           {a.in_comparison ? <span className="chip">Comparison matrix</span> : null}
           {a.in_rfq ? <span className="chip">RFQ engine</span> : null}
+          {a.is_wholesale_only ? <span className="chip wait">Wholesale only</span> : a.is_consumer_visible ? <span className="chip info">Consumer facing</span> : <span className="chip">Not on storefronts</span>}
         </div>
       </div>
       {!inherited && canEdit ? (
@@ -567,7 +568,7 @@ function AttrRow({ a, inherited, index, state, usage, canEdit, onEdit, onDelete,
 
 function AttrEditor({ initial, units, takenKeys, usage, onClose, onSave }: { initial: Attr | null; units: { code: string; label: string; dimension: string }[]; takenKeys: Set<string>; usage?: number; onClose: () => void; onSave: (a: Attr) => void }) {
   const [a, setA] = useState<Attr>(
-    initial ?? { key: "", label: "", input_type: "text", unit: null, options: [], required: false, min_value: null, max_value: null, regex: null, help: "", is_filterable: false, in_comparison: false, in_rfq: false },
+    initial ?? { key: "", label: "", input_type: "text", unit: null, options: [], required: false, min_value: null, max_value: null, regex: null, help: "", is_filterable: false, in_comparison: false, in_rfq: false, is_wholesale_only: false, is_consumer_visible: true },
   );
   const [keyTouched, setKeyTouched] = useState(Boolean(initial));
   const [opt, setOpt] = useState("");
@@ -727,6 +728,34 @@ function AttrEditor({ initial, units, takenKeys, usage, onClose, onSave }: { ini
             <input type="checkbox" checked={a.in_rfq} disabled={a.input_type === "file"} onChange={(e) => set("in_rfq", e.target.checked)} /> Include in RFQ engine
           </label>
         </div>
+        <div className="section-title" style={{ margin: "4px 0 0" }}>
+          Channel visibility
+        </div>
+        <div className="seg" style={{ alignSelf: "flex-start", flexWrap: "wrap" }} role="radiogroup" aria-label="Channel visibility">
+          {(
+            [
+              ["consumer", "Public consumer facing", false, true],
+              ["wholesale", "Wholesale only", true, false],
+              ["hidden", "B2B, not on storefronts", false, false],
+            ] as const
+          ).map(([k, label, w, c]) => {
+            const on = Boolean(a.is_wholesale_only) === w && Boolean(a.is_consumer_visible) === c;
+            return (
+              <button key={k} type="button" role="radio" aria-checked={on} className={on ? "on" : ""} disabled={c && a.input_type === "file"} onClick={() => setA((x) => ({ ...x, is_wholesale_only: w, is_consumer_visible: c }))}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="hint" style={{ fontSize: 12, color: "var(--muted)" }}>
+          {a.is_wholesale_only
+            ? "Suppliers and merchants see it; storefronts, the headless API and Shopify feeds never do."
+            : a.is_consumer_visible
+              ? a.input_type === "file"
+                ? "Files stay private and are never shown on storefronts."
+                : "Shown on merchant storefronts and in the headless API."
+              : "Visible on the wholesale side; left off storefronts."}
+        </div>
       </div>
     </Modal>
   );
@@ -734,7 +763,7 @@ function AttrEditor({ initial, units, takenKeys, usage, onClose, onSave }: { ini
 
 function PreviewForm({ attrs, name, leaf, onClose }: { attrs: Attr[]; name: string; leaf: boolean; onClose: () => void }) {
   const [values, setValues] = useState<Record<string, unknown>>({});
-  const [mode, setMode] = useState<"product" | "rfq">("product");
+  const [mode, setMode] = useState<"product" | "rfq" | "consumer">("product");
   return (
     <Modal title={`Preview: ${name}`} sub={leaf ? "What a supplier sees when listing here (unsaved changes included)" : "Every leaf below this node shows these fields, plus its own"} onClose={onClose} wide>
       <div className="stack">
@@ -743,10 +772,20 @@ function PreviewForm({ attrs, name, leaf, onClose }: { attrs: Attr[]; name: stri
             Supplier listing
           </button>
           <button className={mode === "rfq" ? "on" : ""} onClick={() => setMode("rfq")}>
-            Buyer RFQ
+            Merchant RFQ
+          </button>
+          <button className={mode === "consumer" ? "on" : ""} onClick={() => setMode("consumer")}>
+            Consumer storefront
           </button>
         </div>
-        <DynamicForm attrs={attrs} values={values} onChange={setValues} mode={mode === "rfq" ? "rfq" : "preview"} showSource />
+        {mode === "consumer" ? <div className="muted" style={{ fontSize: 12.5 }}>Only consumer-facing fields reach storefronts; wholesale-only specs are dropped.</div> : null}
+        <DynamicForm
+          attrs={mode === "consumer" ? attrs.filter((x) => x.is_consumer_visible && !x.is_wholesale_only && x.input_type !== "file") : attrs}
+          values={values}
+          onChange={setValues}
+          mode={mode === "rfq" ? "rfq" : "preview"}
+          showSource
+        />
       </div>
     </Modal>
   );

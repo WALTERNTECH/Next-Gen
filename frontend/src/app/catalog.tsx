@@ -5,6 +5,7 @@ import { api, imageUrl, openFile } from "../lib/api";
 import { date, fmtValue, KIND_LABEL, money, num } from "../lib/format";
 import { Card, Empty, Failed, Loading, PageHead, Swatch, swatchKind, Tier, toastError, useLoad } from "../ui/kit";
 import { isSupplier, useSession } from "./Auth";
+import { AddToStore } from "./merchant";
 
 // Catalog browsing: category tree, facets built from the attributes admins flag as filterable,
 // product pages, and the comparison matrix.
@@ -311,7 +312,7 @@ export function ProductCard({ p, compared, onCompare }: { p: any; compared?: boo
           <Columns3 /> {compared ? "Comparing" : "Compare"}
         </label>
       ) : null}
-      {p.is_sample ? <span className="chip sample-tag">Sample listing</span> : null}
+      {p.is_sample ? <span className="chip sample-tag">Sample listing</span> : p.dropship_enabled ? <span className="chip sample-tag info">Dropship</span> : null}
       <Link to={`/catalog/${p.id}`} className="media">
         <Swatch color={p.swatch} kind={swatchKind(p.attributes, p.category_name)} imageId={p.image_id} title={p.title} />
       </Link>
@@ -384,9 +385,12 @@ export function ProductPage() {
                 <Columns3 /> {cmp.ids.includes(p.id) ? "In comparison" : "Compare"}
               </button>
               {me?.user.company_kind === "buyer" ? (
-                <Link to={`/rfqs/new?product=${p.id}`} className="btn primary">
-                  Request quote
-                </Link>
+                <>
+                  <AddToStore product={p} />
+                  <Link to={`/rfqs/new?product=${p.id}`} className="btn primary">
+                    Request quote
+                  </Link>
+                </>
               ) : null}
             </>
           )
@@ -427,6 +431,12 @@ export function ProductPage() {
                 </div>
                 <div>Lead time</div>
                 <div>{p.lead_time_days ? `${p.lead_time_days} days` : "On request"}</div>
+                {p.dropship_enabled ? (
+                  <>
+                    <div>Dropship</div>
+                    <div className="num">{money(p.dropship_price_cents, p.currency)} per unit, shipped to your consumer</div>
+                  </>
+                ) : null}
                 <div>Samples</div>
                 <div>{p.sample_available ? (p.sample_price_cents ? `${money(p.sample_price_cents, p.currency)} per sample set` : "Free") : "Not offered"}</div>
               </div>

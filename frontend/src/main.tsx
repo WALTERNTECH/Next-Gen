@@ -7,6 +7,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Admin } from "./admin/Admin";
 import { SessionProvider, SignIn, SignUp } from "./app/Auth";
 import { Workspace } from "./app/Workspace";
+import { Shop } from "./shop/Shop";
 import { Toasts } from "./ui/kit";
 import { initTheme } from "./ui/Shell";
 
@@ -20,6 +21,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
           <Route path="/admin/*" element={<Admin />} />
+          <Route path="/s/:slug/*" element={<Shop />} />
           <Route path="/*" element={<Workspace />} />
         </Routes>
       </SessionProvider>

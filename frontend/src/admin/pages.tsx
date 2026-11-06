@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Building2, ClipboardCheck, FileText, Gavel, Layers, Lock, Package, Scale, ShieldCheck, Users } from "lucide-react";
+import { AlertTriangle, ArrowRight, BadgeCheck, Banknote, Building2, ClipboardCheck, FileText, Gavel, Layers, Lock, Package, Scale, ShieldCheck, Store, Users } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, openFile } from "../lib/api";
@@ -17,7 +17,9 @@ export function AdminDashboard() {
   if (loading || !data) return <Loading rows={8} />;
   const c = data.counts;
   const queue = [
-    { n: c.disputes, label: "Disputes with frozen escrow", to: "/admin/disputes", icon: <Gavel />, tone: "bad" },
+    { n: c.consumer_issues, label: "Consumer refund claims holding payouts", to: "/admin/arbitration", icon: <Gavel />, tone: "bad" },
+    { n: c.disputes, label: "B2B disputes with frozen escrow", to: "/admin/arbitration", icon: <Gavel />, tone: "bad" },
+    { n: c.failed_inspections, label: "Orders back in production after a failed AQL inspection", to: "/admin/arbitration", icon: <ClipboardCheck />, tone: "wait" },
     { n: c.inspections, label: "Orders waiting for AQL 2.5 inspection", to: "/admin/inspections", icon: <ClipboardCheck />, tone: "wait" },
     { n: c.verification, label: "Companies waiting for verification", to: "/admin/verification", icon: <BadgeCheck />, tone: "wait" },
     { n: c.certifications, label: "Certificates to review", to: "/admin/certifications", icon: <ShieldCheck />, tone: "wait" },
@@ -71,8 +73,18 @@ export function AdminDashboard() {
           </div>
         </div>
 
+        <div>
+          <div className="section-title">Retail (B2C)</div>
+          <div className="stats">
+            <Stat k="Live storefronts" v={data.retail.live_stores} d={`${num(data.retail.retail_listings)} retail listings`} icon={<Store />} />
+            <Stat k="Consumer orders, 24 h" v={data.retail.orders_today} d={`GMV ${money(data.retail.gmv, "USD", { compact: true })} to date`} />
+            <Stat k="Splits held" v={money(data.retail.held, "USD", { compact: true })} d="Released on delivery" />
+            <Stat k="Platform fees earned" v={money(data.retail.fees_earned, "USD", { compact: true })} />
+          </div>
+        </div>
+
         <div className="layout-2 even">
-          <Card title="Escrow position" sub={data.payments === "simulated" ? "Gateway in test mode" : "Held at the gateway"}>
+          <Card title="Wholesale escrow position" sub={data.payments === "simulated" ? "Gateway in test mode" : "Held at the gateway"}>
             <div className="row" style={{ alignItems: "baseline" }}>
               <span className="grow muted">Held now</span>
               <b style={{ fontSize: 24 }} className="num">
@@ -1305,6 +1317,30 @@ function AddAdmin({ onClose, onDone }: { onClose: () => void; onDone: () => void
   );
 }
 
+function PlatformFee({ pct, canEdit, onSaved }: { pct: number; canEdit: boolean; onSaved: () => void }) {
+  const [v, setV] = useState(String(pct));
+  const { busy, run } = useAction();
+  const p = Number(v) || 0;
+  return (
+    <Card title="Platform fee" sub="Taken from every consumer order's item value (net of tax) when the payment is split. Applies to new orders.">
+      <div className="row wrap">
+        <div className="input-group" style={{ width: 140 }}>
+          <input className="input num" inputMode="decimal" value={v} disabled={!canEdit} onChange={(e) => setV(e.target.value)} aria-label="Platform fee percent" />
+          <span className="addon">%</span>
+        </div>
+        {canEdit ? (
+          <button className="btn" disabled={busy === "f" || p === pct || p < 0 || p > 40} onClick={() => run("f", () => api.put("/admin/settings/platform-fee", { pct: p }), "Platform fee saved").then((x) => x && onSaved())}>
+            Save
+          </button>
+        ) : null}
+      </div>
+      <div className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
+        On a {money(10000)} order with a {money(4000)} supplier cost: supplier {money(4000)}, platform {money(p * 100)}, merchant {money(10000 - 4000 - p * 100)}.
+      </div>
+    </Card>
+  );
+}
+
 export function Settings({ me }: { me: AdminMe }) {
   const { data, error, loading, reload } = useLoad(() => api.get("/admin/settings"), []);
   const [confirm, setConfirm] = useState<"remove" | "restore" | null>(null);
@@ -1340,7 +1376,8 @@ export function Settings({ me }: { me: AdminMe }) {
             <div>httpOnly, SameSite=Strict cookies; CSRF header on every write.</div>
           </div>
         </Card>
-        <Card title="Sample data" sub="Sample suppliers and listings to try the catalog. Labelled everywhere they appear.">
+        <PlatformFee pct={data.platform_fee_pct} canEdit={["owner", "admin", "finance"].includes(me.role)} onSaved={reload} />
+        <Card title="Sample data" sub="Sample suppliers, a sample storefront and listings to try the platform. Labelled everywhere they appear.">
           <div className="row wrap">
             <span className="grow muted">
               {data.sample.companies} sample suppliers · {data.sample.products} sample listings

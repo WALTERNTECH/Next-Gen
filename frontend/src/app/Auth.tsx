@@ -129,7 +129,7 @@ export function SignIn() {
 }
 
 const KINDS = [
-  { k: "buyer", label: "Buyer", icon: ShoppingBag },
+  { k: "buyer", label: "Merchant / retailer", icon: ShoppingBag },
   { k: "supplier", label: "Supplier / mill", icon: Building2 },
   { k: "factory", label: "CMT factory", icon: Factory },
 ] as const;

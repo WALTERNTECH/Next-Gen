@@ -47,7 +47,7 @@ export const STAGES: Record<string, { label: string; tone: "good" | "wait" | "ba
   cancelled: { label: "Cancelled", tone: "" },
   refunded: { label: "Refunded", tone: "" },
 };
-export const KIND_LABEL: Record<string, string> = { buyer: "Buyer", supplier: "Supplier", factory: "CMT factory" };
+export const KIND_LABEL: Record<string, string> = { buyer: "Merchant", supplier: "Supplier", factory: "CMT factory" };
 export const TIER_LABEL = ["Unverified", "Registered", "Verified business", "Audited"];
 
 export function fmtValue(v: unknown, unit?: string | null): string {

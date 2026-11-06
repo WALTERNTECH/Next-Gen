@@ -311,6 +311,18 @@ meRouter.get("/dashboard", async (req, res) => {
     extra = {
       rfqs_open: (await one<{ n: number }>(q, `select count(*)::int as n from rfqs where buyer_company_id = $1 and status = 'open'`, [cid]))!.n,
       proposals_waiting: (await one<{ n: number }>(q, `select count(*)::int as n from proposals p join rfqs r on r.id = p.rfq_id where r.buyer_company_id = $1 and r.status = 'open' and p.status = 'submitted'`, [cid]))!.n,
+      retail: await one(
+        q,
+        `select (select status from storefronts where company_id = $1) as store_status,
+                (select slug from storefronts where company_id = $1) as store_slug,
+                (select count(*)::int from consumer_orders o where o.merchant_company_id = $1 and o.status = 'paid'
+                   and exists (select 1 from consumer_order_lines l where l.order_id = o.id and not l.is_dropshipped and l.fulfilment = 'pending')) as to_ship,
+                (select count(*)::int from consumer_issues i join consumer_orders o on o.id = i.order_id where o.merchant_company_id = $1 and i.status = 'open') as issues,
+                (select count(*)::int from consumer_orders where merchant_company_id = $1 and created_at > now() - interval '30 days') as orders_30d,
+                (select coalesce(sum(amount_cents),0)::bigint from payout_splits where company_id = $1 and party = 'merchant' and status = 'held') as margin_held,
+                (select coalesce(sum(amount_cents),0)::bigint from payout_splits where company_id = $1 and party = 'merchant' and status = 'released') as margin_released`,
+        [cid],
+      ),
     };
   } else {
     extra = {
@@ -323,6 +335,12 @@ meRouter.get("/dashboard", async (req, res) => {
       products_active: (await one<{ n: number }>(q, `select count(*)::int as n from products where company_id = $1 and status = 'active'`, [cid]))!.n,
       proposals_open: (await one<{ n: number }>(q, `select count(*)::int as n from proposals where supplier_company_id = $1 and status = 'submitted'`, [cid]))!.n,
       payout_set: Boolean(await one(q, `select 1 from payout_accounts where company_id = $1`, [cid])),
+      dropship_to_ship: (await one<{ n: number }>(
+        q,
+        `select count(*)::int as n from consumer_order_lines l join consumer_orders o on o.id = l.order_id
+          where l.supplier_company_id = $1 and l.is_dropshipped and l.fulfilment = 'pending' and o.status in ('paid','shipped')`,
+        [cid],
+      ))!.n,
     };
   }
   const company = await one(q, `select tier, verification_status from companies where id = $1`, [cid]);

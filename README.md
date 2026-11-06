@@ -27,6 +27,18 @@ Sample payment is held in escrow until the buyer approves the lab dip. Funding t
 - GDPR/CCPA: `GET /api/me/export` (full JSON, sensitive fields decrypted for the owner) and `POST /api/me/delete` (erasure; trade records kept without identity).
 - Payments: the gateway is a seam (`PAYMENTS_DRIVER`). It runs `simulated` until Stripe Connect / Adyen keys exist; card data never touches this app.
 
+## B2B2C (PRD v2)
+
+- **Merchants** (the buyer account type, labelled Merchant / retailer) run a storefront at `/s/<slug>`: retail listings published from the wholesale catalog, either **dropshipped** by the supplier at its dropship price or sold **from the merchant's own stock** (bulk orders). Tax rules per destination country (VAT / sales tax, inclusive or added at checkout), flat or free-over shipping, a delivery window from handling + transit days.
+- **Consumers** have platform accounts (PII sealed with AES-256-GCM, email found by hash), checkout, order tracking, "I received my order", problem reports, reviews from verified purchases only, and GDPR/CCPA export and erasure.
+- **Split payouts** (workflow B): each consumer payment is split at once into held rows: supplier cost (dropship lines), platform fee (`platform_fee_pct` of item value net of tax, Admin › Settings), tax (owed by the merchant), merchant margin. They sum to the charge. Released when the consumer confirms delivery, or by the daily cron (`/api/cron/release`, `CRON_SECRET`) 7 days after a delivery mark or 21 after shipment, unless a claim is open. Refunds before release reverse the rows; partial refunds come out of the merchant's share.
+- **PII segregation**: suppliers get a masked dropship label (first name + last initial, address, last four phone digits, never the email); admins see city and country only; the merchant, as seller of record, sees the full details.
+- **Channel visibility**: every attribute is public consumer-facing, wholesale-only, or B2B-but-not-on-storefronts. Storefronts, the headless API and the Shopify feed only ever carry consumer-facing values.
+- **Headless API** (`Authorization: Bearer ngk_…`, keys in Storefront › API and sync, stored hashed): `GET /api/v1/listings`, `GET /api/v1/feed/shopify.csv` (Shopify product CSV; WooCommerce imports it), `POST /api/v1/orders` for orders taken on an external store, `GET /api/v1/orders/:ref`.
+- **Arbitration desk** (Admin): consumer refund claims, B2B escrow disputes and failed AQL 2.5 inspections in one queue.
+
+A labelled sample store, Kilele Basics (`/s/kilele-basics`), dropships the sample garments and headphones.
+
 ## Running
 
 ```

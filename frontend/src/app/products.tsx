@@ -109,7 +109,7 @@ export function ProductEditor() {
   const [schema, setSchema] = useState<Attr[]>([]);
   const [path, setPath] = useState<any[]>([]);
   const [values, setValues] = useState<Record<string, unknown>>({});
-  const [f, setF] = useState({ title: "", description: "", unit: "pcs", moq: "", lead: "", sample_available: true, sample: "", currency: "USD", swatch: "#8d8a84" });
+  const [f, setF] = useState({ title: "", description: "", unit: "pcs", moq: "", lead: "", sample_available: true, sample: "", currency: "USD", swatch: "#8d8a84", dropship: false, dropship_price: "" });
   const [tiers, setTiers] = useState<Tier[]>([{ min_qty: "", price: "" }]);
   const [matrix, setMatrix] = useState<Mx[]>([]);
   const [images, setImages] = useState<string[]>([]);
@@ -123,7 +123,7 @@ export function ProductEditor() {
     if (!p) return;
     setCategory(p.category_id);
     setValues(p.attributes ?? {});
-    setF({ title: p.title, description: p.description, unit: p.unit, moq: String(p.moq), lead: p.lead_time_days ? String(p.lead_time_days) : "", sample_available: p.sample_available, sample: fromCents(p.sample_price_cents), currency: p.currency, swatch: p.swatch ?? "#8d8a84" });
+    setF({ title: p.title, description: p.description, unit: p.unit, moq: String(p.moq), lead: p.lead_time_days ? String(p.lead_time_days) : "", sample_available: p.sample_available, sample: fromCents(p.sample_price_cents), currency: p.currency, swatch: p.swatch ?? "#8d8a84", dropship: Boolean(p.dropship_enabled), dropship_price: fromCents(p.dropship_price_cents) });
     setTiers(p.price_tiers.map((t: any) => ({ min_qty: String(t.min_qty), price: fromCents(t.unit_price_cents) })));
     setMatrix((p.moq_matrix ?? []).map((m: any) => ({ size: m.size, color: m.color, min_qty: String(m.min_qty) })));
     setImages(p.image_ids ?? []);
@@ -167,6 +167,8 @@ export function ProductEditor() {
       image_ids: images,
       swatch: f.swatch,
       status,
+      dropship_enabled: f.dropship,
+      dropship_price_cents: f.dropship ? toCents(f.dropship_price) : null,
     };
     try {
       const r = await run("save", async () => {
@@ -364,6 +366,21 @@ export function ProductEditor() {
                   <div className="input-group">
                     <span className="addon pre">{f.currency}</span>
                     <input className="input num" inputMode="decimal" value={f.sample} onChange={(e) => set("sample", e.target.value)} />
+                  </div>
+                </Field>
+              ) : null}
+            </div>
+          </Card>
+          <Card title="Dropship" sub="Let merchants sell single units to consumers; you ship each order directly.">
+            <div className="stack">
+              <label className="switch">
+                <input type="checkbox" checked={f.dropship} onChange={(e) => set("dropship", e.target.checked)} /> Offer dropshipping
+              </label>
+              {f.dropship ? (
+                <Field label="Dropship price per unit" hint="What you're paid per unit, held at the consumer's payment and released on delivery">
+                  <div className="input-group">
+                    <span className="addon pre">{f.currency}</span>
+                    <input className="input num" inputMode="decimal" value={f.dropship_price} onChange={(e) => set("dropship_price", e.target.value)} />
                   </div>
                 </Field>
               ) : null}

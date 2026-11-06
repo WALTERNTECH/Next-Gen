@@ -1,4 +1,4 @@
-import { Banknote, BadgeCheck, Building2, ClipboardCheck, ClipboardList, Cog, FileClock, Gauge, Gavel, Inbox, Layers, Loader2, Package, Ruler, Settings2, ShieldCheck, Siren, Store, UserCog, Users } from "lucide-react";
+import { Banknote, BadgeCheck, Building2, ClipboardCheck, ClipboardList, Cog, FileClock, Gauge, Gavel, Inbox, Layers, Loader2, Package, Ruler, Scale, Settings2, ShieldCheck, ShoppingBag, ShoppingCart, Siren, Split, Star, Store, UserCog, Users } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
@@ -6,6 +6,7 @@ import { Field, Loading, Mark } from "../ui/kit";
 import { Shell, type Badge, type Hit, type NavGroup, type NavItem } from "../ui/Shell";
 import { AdminDashboard, AdminOrder, AdminOrders, AdminProducts, AdminRfqs, AdminUsers, Audit, CertQueue, Companies, CompanyDetail, Disputes, Escrow, Settings, Team } from "./pages";
 import { Taxonomy, Units } from "./Taxonomy";
+import { AdminConsumerOrder, AdminConsumerOrders, AdminReviews, Arbitration, SplitLedger, Storefronts } from "./retail";
 
 // The admin portal: its own sign-in (password, then an authenticator code every time), its own
 // session cookie, and a console laid out Dashboard first, then groups in priority order.
@@ -19,7 +20,7 @@ const GROUPS: NavGroup[] = [
     label: "Needs attention",
     icon: Siren,
     items: [
-      { to: "/admin/disputes", label: "Disputes", icon: Gavel, badge: "disputes" },
+      { to: "/admin/arbitration", label: "Arbitration desk", icon: Gavel, badge: "arbitration" },
       { to: "/admin/inspections", label: "Inspections", icon: ClipboardCheck, badge: "inspections" },
       { to: "/admin/verification", label: "Verification queue", icon: BadgeCheck, badge: "verification" },
       { to: "/admin/certifications", label: "Certifications", icon: ShieldCheck, badge: "certifications" },
@@ -37,12 +38,24 @@ const GROUPS: NavGroup[] = [
   },
   {
     id: "trade",
-    label: "Trade",
+    label: "Wholesale (B2B)",
     icon: Store,
     items: [
       { to: "/admin/orders", label: "Orders", icon: ClipboardList },
       { to: "/admin/rfqs", label: "RFQs", icon: Inbox },
+      { to: "/admin/disputes", label: "Disputes history", icon: Scale },
       { to: "/admin/escrow", label: "Escrow ledger", icon: Banknote },
+    ],
+  },
+  {
+    id: "retail",
+    label: "Retail (B2C)",
+    icon: ShoppingBag,
+    items: [
+      { to: "/admin/storefronts", label: "Storefronts", icon: Store },
+      { to: "/admin/consumer-orders", label: "Consumer orders", icon: ShoppingCart },
+      { to: "/admin/splits", label: "Split ledger", icon: Split },
+      { to: "/admin/reviews", label: "Reviews", icon: Star },
     ],
   },
   {
@@ -112,7 +125,7 @@ function Console({ me, payments, onSignOut }: { me: AdminMe; payments: string; o
       .then((r) => {
         const c = r.counts;
         setBadges({
-          disputes: { n: c.disputes, tone: "bad" },
+          arbitration: { n: c.disputes + c.consumer_issues + c.failed_inspections, tone: c.disputes + c.consumer_issues ? "bad" : "wait" },
           inspections: { n: c.inspections, tone: "wait" },
           verification: { n: c.verification, tone: "wait" },
           certifications: { n: c.certifications, tone: "wait" },
@@ -159,6 +172,12 @@ function Console({ me, payments, onSignOut }: { me: AdminMe; payments: string; o
         <Route path="orders/:id" element={<AdminOrder />} />
         <Route path="rfqs" element={<AdminRfqs />} />
         <Route path="disputes" element={<Disputes />} />
+        <Route path="arbitration" element={<Arbitration />} />
+        <Route path="storefronts" element={<Storefronts />} />
+        <Route path="consumer-orders" element={<AdminConsumerOrders />} />
+        <Route path="consumer-orders/:id" element={<AdminConsumerOrder />} />
+        <Route path="splits" element={<SplitLedger />} />
+        <Route path="reviews" element={<AdminReviews />} />
         <Route path="escrow" element={<Escrow />} />
         <Route path="users" element={<AdminUsers />} />
         <Route path="logs" element={<Audit />} />
